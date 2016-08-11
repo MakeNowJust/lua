@@ -43,7 +43,7 @@ const char lua_ident[] =
 #define isvalid(o)	((o) != luaO_nilobject)
 
 /* test for pseudo index */
-#define ispseudo(i)		((i) <= LUA_REGISTRYINDEX)
+#define ispseudo(i)		((i) <= LUA_PERSISTENTINDEX)
 
 /* test for upvalue */
 #define isupvalue(i)		((i) < LUA_REGISTRYINDEX)
@@ -71,6 +71,8 @@ static TValue *index2addr (lua_State *L, int idx) {
   }
   else if (idx == LUA_REGISTRYINDEX)
     return &G(L)->l_registry;
+  else if (idx == LUA_PERSISTENTINDEX)
+    return &G(L)->l_persistent;
   else {  /* upvalues */
     idx = LUA_REGISTRYINDEX - idx;
     api_check(L, idx <= MAXUPVAL + 1, "upvalue index too large");

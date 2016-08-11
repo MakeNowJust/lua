@@ -124,6 +124,7 @@ typedef struct global_State {
   lu_mem GCestimate;  /* an estimate of the non-garbage memory in use */
   stringtable strt;  /* hash table for strings */
   TValue l_registry;
+  TValue l_persistent;
   unsigned int seed;  /* randomized seed for hashes */
   lu_byte currentwhite;
   lu_byte gcstate;  /* state of garbage collector */

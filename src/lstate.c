@@ -187,12 +187,18 @@ static void init_registry (lua_State *L, global_State *g) {
   Table *registry = luaH_new(L);
   sethvalue(L, &g->l_registry, registry);
   luaH_resize(L, registry, LUA_RIDX_LAST, 0);
+  /* create persistent */
+  Table *persistent = luaH_new(L);
+  sethvalue(L, &g->l_persistent, persistent);
   /* registry[LUA_RIDX_MAINTHREAD] = L */
   setthvalue(L, &temp, L);  /* temp = L */
   luaH_setint(L, registry, LUA_RIDX_MAINTHREAD, &temp);
   /* registry[LUA_RIDX_GLOBALS] = table of globals */
   sethvalue(L, &temp, luaH_new(L));  /* temp = new table (global table) */
   luaH_setint(L, registry, LUA_RIDX_GLOBALS, &temp);
+  /* registry[LUA_RIDX_PERSISTENT] = table of persistent */
+  sethvalue(L, &temp, persistent);  /* temp = persistent table */
+  luaH_setint(L, registry, LUA_RIDX_PERSISTENT, &temp);
 }
 
 
@@ -314,6 +320,7 @@ LUA_API lua_State *lua_newstate (lua_Alloc f, void *ud) {
   g->strt.size = g->strt.nuse = 0;
   g->strt.hash = NULL;
   setnilvalue(&g->l_registry);
+  setnilvalue(&g->l_persistent);
   g->panic = NULL;
   g->version = NULL;
   g->gcstate = GCSpause;

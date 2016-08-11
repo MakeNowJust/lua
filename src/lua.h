@@ -40,6 +40,7 @@
 ** space after that to help overflow detection)
 */
 #define LUA_REGISTRYINDEX	(-LUAI_MAXSTACK - 1000)
+#define LUA_PERSISTENTINDEX	(-LUAI_MAXSTACK - 1000 + 1)
 #define lua_upvalueindex(i)	(LUA_REGISTRYINDEX - (i))
 
 
@@ -82,7 +83,8 @@ typedef struct lua_State lua_State;
 /* predefined values in the registry */
 #define LUA_RIDX_MAINTHREAD	1
 #define LUA_RIDX_GLOBALS	2
-#define LUA_RIDX_LAST		LUA_RIDX_GLOBALS
+#define LUA_RIDX_PERSISTENT	3
+#define LUA_RIDX_LAST		LUA_RIDX_PERSISTENT
 
 
 /* type of numbers in Lua */

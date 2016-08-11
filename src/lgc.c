@@ -339,6 +339,7 @@ static void restartcollection (global_State *g) {
   g->weak = g->allweak = g->ephemeron = NULL;
   markobject(g, g->mainthread);
   markvalue(g, &g->l_registry);
+  markvalue(g, &g->l_persistent);
   markmt(g);
   markbeingfnz(g);  /* mark any finalizing object left from previous cycle */
 }
@@ -988,6 +989,7 @@ static l_mem atomic (lua_State *L) {
   markobject(g, L);  /* mark running thread */
   /* registry and global metatables may be changed by API */
   markvalue(g, &g->l_registry);
+  markvalue(g, &g->l_persistent);
   markmt(g);  /* mark global metatables */
   /* remark occasional upvalues of (maybe) dead threads */
   remarkupvals(g);

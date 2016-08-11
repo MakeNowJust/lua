@@ -449,6 +449,279 @@ static int luaB_tostring (lua_State *L) {
   return 1;
 }
 
+static int persistent_parse(lua_State *L, size_t size, unsigned char *buf, int *pt) {
+  /* short int */
+  if (buf[*pt] <= 0x20) {
+    *pt += 1;
+    lua_pushinteger(L, (lua_Integer)buf[*pt - 1]);
+    return 0;
+  }
+  switch (buf[*pt]) {
+  case 0x21: /* integer */ {
+      *pt += 1;
+      if (*pt + sizeof(lua_Integer) >= size) {
+        return 1;
+      }
+      lua_Integer i = *(lua_Integer *)(buf + *pt);
+      *pt += sizeof(lua_Integer);
+      lua_pushinteger(L, i);
+      return 0;
+    }
+  case 0x22: /* number */ {
+      *pt += 1;
+      if (*pt + sizeof(lua_Number) >= size) {
+        return 1;
+      }
+      lua_Integer n = *(lua_Number *)(buf + *pt);
+      *pt += sizeof(lua_Number);
+      lua_pushnumber(L, n);
+      return 0;
+    }
+  case 0x23: /* nil */
+    lua_pushnil(L);
+    *pt += 1;
+    return 0;
+  case 0x24: /* true */
+    lua_pushboolean(L, 1);
+    *pt += 1;
+    return 0;
+  case 0x25: /* false */
+    lua_pushboolean(L, 0);
+    *pt += 1;
+    return 0;
+  case 0x26: /* string */ {
+      *pt += 1;
+      persistent_parse(L, size, buf, pt);
+      size_t i = lua_tointeger(L, -1);
+      lua_pop(L, 1);
+      if (*pt + i >= size) {
+        return 1;
+      }
+      lua_pushlstring(L, (char *)(buf + *pt), i);
+      *pt += i;
+      return 0;
+    }
+  case 0x27: /* table */ {
+      *pt += 1;
+      lua_createtable(L, 0, 0);
+      for (;;) {
+        if (*pt < size && buf[*pt] == 0x28) {
+          break;
+        }
+        if (persistent_parse(L, size, buf, pt)) {
+          return 1;
+        }
+        if (persistent_parse(L, size, buf, pt)) {
+          return 1;
+        }
+        lua_settable(L, -3);
+      }
+      *pt += 1;
+      return 0;
+    }
+  case 0x28: /* table end */
+      return 1;
+  default:
+      return 1;
+  }
+}
+
+static void persistent_set(lua_State *L) {
+  //luaL_checktype(L, 1, LUA_TTABLE);
+  lua_pushglobaltable(L);
+  lua_pushvalue(L, LUA_PERSISTENTINDEX);
+  lua_pushnil(L);
+  //printf("loop\n");
+  while (lua_next(L, -2)) {
+    lua_pop(L, 1);
+    lua_pushvalue(L, -1);
+    lua_pushvalue(L, -1);
+    lua_gettable(L, -6);
+    lua_settable(L, -5);
+    //printf("key: %s\n", lua_tostring(L, -1));
+  }
+  lua_pop(L, 2);
+}
+
+static int persistent_load(lua_State *L, const char *file) {
+  FILE *fp = fopen(file, "r");
+  if (fp == NULL) {
+    return 0;
+  }
+
+  if (fseek(fp, 0, SEEK_END) != 0) {
+    goto error;
+  }
+
+  size_t size = ftell(fp);
+  if (size == -1) {
+    goto error;
+  }
+
+  if (fseek(fp, 0, SEEK_SET) != 0) {
+    goto error;
+  }
+
+  unsigned char *buf = calloc(size, sizeof(unsigned char));
+  if (buf == NULL) {
+    goto error;
+  }
+
+  if (fread(buf, sizeof(unsigned char), size, fp) != size) {
+    free(buf);
+    goto error;
+  }
+
+  fclose(fp);
+  int pt = 0;
+  int status = persistent_parse(L, size, buf, &pt);
+  free(buf);
+  persistent_set(L);
+  return status == 0 && size == pt ? 0 : 1;
+
+error:
+  fclose(fp);
+  return 1;
+}
+
+static int luaB_persistent_init(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TSTRING);
+  const char* file = lua_tolstring(L, 1, NULL);
+  lua_setglobal(L, "_PERSISTENT_FILE");
+  if (persistent_load(L, file)) {
+    return lua_error(L);
+  }
+  //lua_pushnil(L);
+  return 1;
+}
+
+static int persistent_write(lua_State *L, FILE *fp, int depth) {
+  switch (lua_type(L, -1)) {
+  case LUA_TNUMBER:
+    if (lua_isinteger(L, -1)) {
+      lua_Integer i = lua_tointeger(L, -1);
+      //printf("integer: %d\n", i);
+      if (0 <= i && i <= 0x20) {
+        char c = (char)i;
+        fwrite(&c, sizeof(char), 1, fp);
+      } else {
+        fwrite("\x21", sizeof(char), 1, fp);
+        fwrite(&i, sizeof(lua_Integer), 1, fp);
+      }
+    } else {
+      lua_Number flt = lua_tonumber(L, -1);
+      //printf("number: %llf\n", flt);
+      fwrite("\x22", sizeof(char), 1, fp);
+      fwrite(&flt, sizeof(lua_Number), 1, fp);
+    }
+    return 0;
+  case LUA_TNIL:
+      //printf("nil\n");
+    fwrite("\x23", sizeof(char), 1, fp);
+    return 0;
+  case LUA_TBOOLEAN:
+    if (lua_toboolean(L, -1)) {
+      //printf("true\n");
+      fwrite("\x24", sizeof(char), 1, fp);
+    } else {
+      //printf("false\n");
+      fwrite("\x25", sizeof(char), 1, fp);
+    }
+    return 0;
+  case LUA_TSTRING: {
+      size_t len;
+      const char *str = lua_tolstring(L, -1, &len);
+      //printf("string: %d: %s\n", len, str);
+      fwrite("\x26", sizeof(char), 1, fp);
+      if (0 <= len && len <= 0x20) {
+        char c = (char)len;
+        fwrite((char *)&c, sizeof(char), 1, fp);
+      } else {
+        lua_Integer ilen = (lua_Integer)len;
+        fwrite("\x21", sizeof(char), 1, fp);
+        fwrite(&ilen, sizeof(lua_Integer), 1, fp);
+      }
+      fwrite(str, sizeof(char), len, fp);
+      return 0;
+    }
+  case LUA_TTABLE:
+    if (depth >= 100) {
+      /* to be nil */
+      //printf("table: too depth\n");
+      fwrite("\x23", sizeof(char), 1, fp);
+    } else {
+      //printf("table\n");
+      fwrite("\x27", sizeof(char), 1, fp);
+      lua_pushnil(L);
+      while (lua_next(L, -2)) {
+        lua_pushvalue(L, -2);
+        //printf("table: key\n");
+        if (persistent_write(L, fp, depth + 1)) {
+          return 1;
+        }
+        lua_pop(L, 1);
+        //printf("table: value\n");
+        if (persistent_write(L, fp, depth + 1)) {
+          return 1;
+        }
+        lua_pop(L, 1);
+      }
+      fwrite("\x28", sizeof(char), 1, fp);
+    }
+    return 0;
+  default:
+    /* to be nil */
+    fwrite("\x23", sizeof(char), 1, fp);
+    return 0;
+  }
+}
+
+static int persistent_save(lua_State *L, const char* file) {
+  FILE *fp = fopen(file, "w");
+  if (fp == NULL) {
+    return 1;
+  }
+  //printf("fopen\n");
+  fwrite("\x27", sizeof(char), 1, fp); /* table start */
+  lua_pushglobaltable(L);
+  lua_pushnil(L);
+  while (lua_next(L, 1)) {
+    lua_pop(L, 1);
+    //printf("lua_next: key\n");
+    if (persistent_write(L, fp, 0)) {
+      goto error;
+    }
+    lua_pushvalue(L, -1);
+    lua_gettable(L, -3);
+    //printf("lua_next: value\n");
+    if (persistent_write(L, fp, 0)) {
+      goto error;
+    }
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 1);
+  fwrite("\x28", sizeof(char), 1, fp); /* table end */
+  fflush(fp);
+  fclose(fp);
+  return 0;
+
+error:
+  fclose(fp);
+  return 1;
+}
+
+static int luaB_persistent_save(lua_State *L) {
+  lua_getglobal(L, "_PERSISTENT_FILE");
+  luaL_checktype(L, -1, LUA_TSTRING);
+  const char* file = lua_tolstring(L, -1, NULL);
+  lua_pop(L, 1);
+  lua_pushvalue(L, LUA_PERSISTENTINDEX);
+  if (persistent_save(L, file)) {
+    return lua_error(L);
+  }
+  return 1;
+}
+
 
 static const luaL_Reg base_funcs[] = {
   {"assert", luaB_assert},
@@ -476,6 +749,9 @@ static const luaL_Reg base_funcs[] = {
   {"tostring", luaB_tostring},
   {"type", luaB_type},
   {"xpcall", luaB_xpcall},
+
+  {"persistent_init", luaB_persistent_init},
+  {"persistent_save", luaB_persistent_save},
   /* placeholders */
   {"_G", NULL},
   {"_VERSION", NULL},
@@ -493,6 +769,9 @@ LUAMOD_API int luaopen_base (lua_State *L) {
   /* set global _VERSION */
   lua_pushliteral(L, LUA_VERSION);
   lua_setfield(L, -2, "_VERSION");
+  /* set global _PERSISTENT */
+  lua_pushvalue(L, LUA_PERSISTENTINDEX);
+  lua_setfield(L, -2, "_PERSISTENT");
   return 1;
 }
 

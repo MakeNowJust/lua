@@ -1105,7 +1105,7 @@ static void block (LexState *ls) {
 */
 struct LHS_assign {
   struct LHS_assign *prev;
-  expdesc v;  /* variable (global, local, upvalue, or indexed) */
+  expdesc v;  /* variable (global, persistent, local, upvalue, or indexed) */
 };
 
 
@@ -1460,6 +1460,25 @@ static void localstat (LexState *ls) {
   adjustlocalvars(ls, nvars);
 }
 
+static void new_persistentvar(LexState *ls, TString *name) {
+  Table *persistent = hvalue(&G(ls->L)->l_persistent);
+  check_condition(ls, luaH_getstr(persistent, name) == luaO_nilobject, "syntax error");
+  TValue key;
+  setsvalue(ls->L, &key, name);
+  TValue *value = luaH_set(ls->L, persistent, &key);
+  setbvalue(value, 1); // persistent[name] = true
+}
+
+static void persistentstat (LexState *ls) {
+  /* persistentstat -> PERSISTENT NAME {',' NAME} */
+  int nvars = 0;
+  check_condition(ls, ls->fs->prev == NULL, "syntax error"); /* toplevel only */
+  do {
+    new_persistentvar(ls, str_checkname(ls));
+    nvars++;
+  } while (testnext(ls, ','));
+}
+
 
 static int funcname (LexState *ls, expdesc *v) {
   /* funcname -> NAME {fieldsel} [':' NAME] */
@@ -1576,6 +1595,11 @@ static void statement (LexState *ls) {
         localfunc(ls);
       else
         localstat(ls);
+      break;
+    }
+    case TK_PERSISTENT: { /* stat -> persistentstat */
+      luaX_next(ls);      /* skip PERSISTENT */
+      persistentstat(ls);
       break;
     }
     case TK_DBCOLON: {  /* stat -> label */
